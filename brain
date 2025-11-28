@@ -1,0 +1,910 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "jsonExample",
+        "jsonExample": "{\n  \"startTime\": 1731583200000,\n  \"userMessage\": \"Hello, I'd like to book an appointment for tomorrow at 3pm.\",\n  \"callerPhone\": \"+962700000000\",\n  \"callId\": \"call_1234567890\",\n  \"modelHint\": \"\",\n  \"detectedLanguage\": \"en\",\n  \"requestTimestamp\": \"2025-11-14T13:30:00.000Z\",\n  \"intent\": \"booking\",\n  \"intentConfidence\": 0.9,\n  \"emotions\": [\"calm\", \"positive\"],\n  \"sentiment\": \"positive\",\n  \"urgency\": \"medium\",\n  \"analysisSource\": \"llm\",\n  \"needsSemantic\": true,\n  \"systemPrompt\": \"You are an AI receptionist that answers calls and helps with booking and FAQs.\",\n  \"calendarIcs\": \"\",\n  \"aiResponse\": \"\"\n}\n"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        5840,
+        5200
+      ],
+      "id": "19a53509-3ae7-4ae2-a140-371f015af6ea",
+      "name": "When Executed by Another Workflow"
+    },
+    {
+      "parameters": {
+        "jsCode": "// JS #1: Configuration & Context\nconst item = $input.first().json || {};\n\n// --- CONFIGURATION SECTION ---\n// 1. Calendar Mapping (Multi-Provider Support)\nconst CALENDAR_MAP = {\n  'default': 'AQMkADAwATY3ZmYAZS02YWQ5LTNiZTYtMDACLTAwCgBGAAAD94D7_wA7JwxPkDTzP_X6RmEHALTfqygsEIRGgNkSjR6UyEAAAAIBBgAAALTfqygsEIRGgNkSjR6UyEAAAAJL1QAAAA==',\n  'dr_smith': 'YOUR_DR_SMITH_CALENDAR_ID_HERE',\n  'dr_jones': 'YOUR_DR_JONES_CALENDAR_ID_HERE'\n};\n\n// 2. Appointment Types & Durations (Minutes)\nconst APPT_TYPES = {\n  'checkup': 30,\n  'consultation': 45,\n  'new_patient': 60,\n  'procedure': 90,\n  'default': 60\n};\n\n// --- LOGIC ---\n// Determine Settings\nconst provider = item.providerId || 'default';\nconst targetCalendarId = CALENDAR_MAP[provider] || CALENDAR_MAP['default'];\n\nconst type = item.appointmentType || 'default';\nconst slotDuration = APPT_TYPES[type] || APPT_TYPES['default'];\n\nconst locale = item.locale || 'en-US';\n// simplistic timezone - ideally passed in input too\nconst timezone = item.clinic_timezone || 'America/New_York';\n\n// Caller Identity & Phone Validation\nconst extractedName = item.entities?.name || item.callerName;\nconst hasName = !!extractedName && extractedName !== 'Valued Patient';\n// FIX: Don't label as 'Unknown', just use 'Patient' to stop AI from obsessing\nconst callerLabel = hasName ? extractedName : \"Patient\";\n\n// PHONE CHECK (Fix for Web Tests)\nlet phone = item.callerPhone || '';\n// If testing via web, phone might be empty or a placeholder\nif (!phone || phone === 'web-test' || phone === 'simulate') {\n    phone = null;\n}\nconst hasPhone = !!phone;\n\n// History\nlet historyText = '';\n// Slice to last 6 turns to keep context manageable\nconst historyRaw = (item.conversationHistory || item.messages || []).slice(-6);\nif (Array.isArray(historyRaw)) {\n    historyText = historyRaw.map(m => \n        `${(m.role || 'user').toUpperCase()}: ${m.content || ''}`\n    ).join('\\n');\n}\n\n// Base Prompt\nlet baseSystem = `\nYou are the receptionist for ${item.clinic_name || 'The Clinic'}.\nCaller: ${callerLabel}\nLanguage/Locale: ${locale}\nTimezone: ${timezone}. Assume caller times are in this timezone unless stated otherwise.\n\nRULES:\n- Be brief, warm, professional.\n- Do NOT greet again.\n- Use ${locale} formatting for dates.\n- If caller describes potentially life-threatening symptoms, advise them to contact emergency services immediately and flag for human transfer.\n`.trim();\n\n// INJECT MISSING PHONE LOGIC\nif (!hasPhone) {\n    baseSystem += `\n\nCRITICAL:\n- The user is contacting via Web Chat and we DO NOT have their phone number.\n- You CANNOT check availability or bookings without a phone number.\n- politely ask for their phone number so you can look up their profile or check the schedule.\n`;\n} else {\n    // FIX: Context-aware name request\n    baseSystem += `\n- You need the caller's name to book. CHECK CONTEXT FIRST. If they mentioned their name in the chat history, USE IT. Only ask if you truly do not know it.\n`;\n}\n\nif (historyText) {\n    baseSystem += `\nRECENT CONVERSATION:\\n${historyText}`;\n}\n\nreturn [{\n    json: {\n        ...item,\n        callerPhone: phone, // Normalized phone\n        hasPhone,\n        systemPrompt: baseSystem,\n        targetCalendarId,\n        slotDuration,\n        hasName,\n        extractedName,\n        locale,\n        timezone\n    }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6080,
+        5184
+      ],
+      "id": "c8d0a044-4845-4776-8c4b-eadb23a55ed8",
+      "name": "🧠 Context & Config"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "book",
+                    "operator": {
+                      "type": "string",
+                      "operation": "contains"
+                    },
+                    "id": "d156dd8f-b179-4f32-be58-6d846266badc"
+                  },
+                  {
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "reschedule",
+                    "operator": {
+                      "type": "string",
+                      "operation": "contains"
+                    },
+                    "id": "46677f16-b237-4cee-8f48-d7ca45398ee6"
+                  }
+                ],
+                "combinator": "or"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "cancel",
+                    "operator": {
+                      "type": "string",
+                      "operation": "contains"
+                    },
+                    "id": "47baab67-b5c7-4fde-8a5b-308c0e4d7adc"
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.3,
+      "position": [
+        6528,
+        5184
+      ],
+      "id": "d1666beb-4a93-4247-b41a-6cc00045d7ec",
+      "name": "🚦 Intent Router"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "has_name",
+              "leftValue": "={{ $json.hasName }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        6752,
+        4896
+      ],
+      "id": "c6beeb27-b534-4091-9b01-1de04720e834",
+      "name": "Known Name?"
+    },
+    {
+      "parameters": {
+        "resource": "event",
+        "fromAllCalendars": false,
+        "calendarId": {
+          "__rl": true,
+          "value": "={{ $('🧠 Context & Config').first().json.targetCalendarId }}",
+          "mode": "id"
+        },
+        "limit": 50,
+        "filters": {
+          "custom": "=start/dateTime ge '{{ new Date().toISOString() }}'"
+        }
+      },
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        6992,
+        4896
+      ],
+      "id": "6cb4029f-f5fb-4d63-afbb-3b316b5e264f",
+      "name": "📅 Get Availability",
+      "webhookId": "9df10497-435c-4ff9-8368-18f8bcf65a3b",
+      "alwaysOutputData": true,
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "R4DP9ULTtcjsMOvu",
+          "name": "Microsoft Outlook account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "resource": "event",
+        "fromAllCalendars": false,
+        "calendarId": {
+          "__rl": true,
+          "value": "={{ $('🧠 Context & Config').first().json.targetCalendarId }}",
+          "mode": "id"
+        },
+        "limit": 5,
+        "filters": {
+          "custom": "=contains(subject, '{{ $('🧠 Context & Config').first().json.callerPhone }}') and start/dateTime ge '{{ new Date().toISOString() }}'"
+        }
+      },
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        6976,
+        5088
+      ],
+      "id": "6d41b46d-9fd8-41f5-9e04-e5c523efc463",
+      "name": "🔍 Find Existing (Reschedule)",
+      "webhookId": "1d8222b5-a805-46d5-9aa7-927ccf8a02a2",
+      "alwaysOutputData": true,
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "R4DP9ULTtcjsMOvu",
+          "name": "Microsoft Outlook account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// JS #2: Smart Booking & Reschedule Logic\nconst item = $input.first().json;\nconst now = new Date();\nconst locale = item.locale || 'en-US';\n\n// 1. Process Free Slots (Defensive Coding)\nlet busyIntervals = [];\ntry {\n    // Check if the node executed (it might be empty if we skipped it)\n    const calItems = $items('📅 Get Availability'); \n    if (calItems && calItems.length) {\n        busyIntervals = calItems.map(i => ({\n            start: new Date(i.json.start.dateTime).getTime(),\n            end: new Date(i.json.end.dateTime).getTime()\n        }));\n    }\n} catch (e) {\n    // Previous node didn't run - likely no phone path or error\n    // Proceed with empty intervals or default logic\n}\n\n// Generate slots using DYNAMIC DURATION\nconst slotMin = item.slotDuration || 60;\nlet freeSlots = [];\n// Simple next 5 days logic\nfor (let d = 0; d < 5; d++) {\n    let day = new Date(); day.setDate(now.getDate() + d); day.setMinutes(0,0,0);\n    for (let h = 9; h < 17; h++) {\n        let s = new Date(day); s.setHours(h);\n        let e = new Date(s); e.setMinutes(e.getMinutes() + slotMin);\n        if (s < now) continue;\n        let busy = busyIntervals.some(b => s.getTime() < b.end && e.getTime() > b.start);\n        if (!busy) freeSlots.push(s);\n    }\n}\n\nconst freeText = freeSlots.slice(0, 8).map(d => \n    `- ${d.toLocaleDateString(locale, {weekday:'short', day:'numeric'})} at ${d.toLocaleTimeString(locale, {hour:'2-digit', minute:'2-digit'})}`\n).join('\\n');\n\n// 2. Check for Existing Appt (Reschedule Case)\nlet existingApptText = \"\";\ntry {\n    const existing = $items('🔍 Find Existing (Reschedule)');\n    if (existing && existing.length > 0) {\n        const e = existing[0].json;\n        existingApptText = `\nCURRENT BOOKING FOUND:\n${e.subject} at ${e.start.dateTime}\nIf user confirms a new time, output BOTH:\nBOOKING_CONFIRMED: [New Time]\nCANCEL_EVENT_ID: ${e.id}\n`;\n    }\n} catch(e) {}\n\nconst enhancedSystem = `\n${item.systemPrompt}\n\n--- CALENDAR (${slotMin} min slots) ---\n${freeText || \"No slots found.\"}\n${existingApptText}\n\n--- INSTRUCTIONS ---\n1. IF user asks for a time, check list above. If valid, say \"Yes, that works.\"\n2. IF user confirms:\n   - Output: BOOKING_CONFIRMED: [ISO with Timezone]\n   - e.g. 2025-01-05T14:00:00-05:00\n   - If rescheduling, also output: CANCEL_EVENT_ID: [ID]\n`;\n\nreturn [{ json: { ...item, systemPrompt: enhancedSystem } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        7248,
+        4992
+      ],
+      "id": "e7ae061b-6ab4-42c0-9207-2034795f8d1c",
+      "name": "🧠 Smart Scheduling Logic"
+    },
+    {
+      "parameters": {
+        "resource": "event",
+        "fromAllCalendars": false,
+        "calendarId": {
+          "__rl": true,
+          "value": "={{ $('🧠 Context & Config').first().json.targetCalendarId }}",
+          "mode": "id"
+        },
+        "limit": 5,
+        "filters": {
+          "custom": "=contains(subject, '{{ $('🧠 Context & Config').first().json.callerPhone }}') and start/dateTime ge '{{ new Date().toISOString() }}'"
+        }
+      },
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        6752,
+        5312
+      ],
+      "id": "feed9dd8-efd1-400c-938b-6d33e3620191",
+      "name": "🔍 Find Appt (Cancel)",
+      "webhookId": "9dd4bc57-4ced-4447-809a-c3668c3dbf3f",
+      "alwaysOutputData": true,
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "R4DP9ULTtcjsMOvu",
+          "name": "Microsoft Outlook account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// JS #3: Cancellation Logic\nconst item = $input.first().json;\n\nlet foundEvent = null;\ntry {\n    const events = $items('🔍 Find Appt (Cancel)');\n    if (events && events.length > 0) foundEvent = events[0].json;\n} catch (e) {\n    // Handle case where node didn't run (missing phone path)\n}\n\nlet enhancedSystem = item.systemPrompt;\nif (foundEvent) {\n    enhancedSystem += `\n--- FOUND APPOINTMENT ---\n${foundEvent.start.dateTime}\nTo Cancel, output: CANCEL_EVENT_ID: ${foundEvent.id}\n`;\n} else {\n    // Don't say \"No appointment found\" if we didn't even check due to missing phone\n    if (item.hasPhone) {\n        enhancedSystem += `\nNo upcoming appointment found for this number.\n`;\n    }\n}\n\nreturn [{ json: { ...item, systemPrompt: enhancedSystem } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        7088,
+        5312
+      ],
+      "id": "e91de255-4b80-476f-bc6c-ae86656db0b3",
+      "name": "🧠 Cancel Logic"
+    },
+    {
+      "parameters": {
+        "model": "llama-3.3-70b-versatile",
+        "options": {
+          "maxTokensToSample": 200,
+          "temperature": 0.6
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        7536,
+        5312
+      ],
+      "id": "07d9c7a7-90de-44c1-a363-ec0503a64c40",
+      "name": "🚀 Groq Brain",
+      "credentials": {
+        "groqApi": {
+          "id": "t9metoWA8AGakQmH",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Post-Process & Triage\nconst item = $input.first().json;\n\n// If we used the Structured Output Parser, the parsed data is in item.output\nconst parsed = item.output || item;\n\n// Pull structured fields\nlet aiResponse      = parsed.reply || \"\";\nlet bookingDetails = parsed.booking_confirmed_iso || null;\nlet cancelEventId  = parsed.cancel_event_id || null;\nlet requiresHuman  = !!parsed.transfer_to_human;\n\n// 2. Extra safety: emergency / complaint detection on raw message\nconst intent = (item.intent || \"\").toLowerCase();\nconst msg    = (item.userMessage || \"\").toLowerCase();\n\nconst emergencyWords = [\n  \"emergency\", \"chest pain\", \"short of breath\",\n  \"difficulty breathing\", \"severe bleeding\", \"unconscious\"\n];\n\nif (\n  intent === \"complaint\" ||\n  msg.includes(\"manager\") ||\n  emergencyWords.some(w => msg.includes(w))\n) {\n  requiresHuman = true;\n}\n\n// 3. Determine Outcome Type\nlet outcomeType = \"INFO_ONLY\";\nif (bookingDetails && cancelEventId) outcomeType = \"RESCHEDULED\";\nelse if (bookingDetails)            outcomeType = \"BOOKED\";\nelse if (cancelEventId)             outcomeType = \"CANCELLED\";\nelse if (requiresHuman)             outcomeType = \"TRANSFERRED\";\n\n// 4. Analytics\nconst callHandledByAI    = !requiresHuman;\nconst appointmentTimeISO = bookingDetails || null;\n\n// 5. Trim Response Length (TTS Fix)\nif (aiResponse.length > 900) {\n  aiResponse = aiResponse.slice(0, 890) + \"...\";\n}\n\n// 6. Calc Processing Time\nconst procTime = Date.now() - (item.startTime || Date.now());\n\nreturn [{\n  json: {\n    ...item,\n    aiResponse,\n    bookingDetails,\n    cancelEventId,\n    outcomeType,\n    appointmentTimeISO,\n    callHandledByAI,\n    requiresHumanTransfer: requiresHuman,\n    procTime,\n    aiModel: \"llama-3.3-70b-versatile\"\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        7920,
+        5088
+      ],
+      "id": "fae75709-4cbe-48f5-b1c9-acedec13d874",
+      "name": "🧹 Clean & Triage"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "check_booking",
+              "leftValue": "={{ $json.bookingDetails }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        8112,
+        5072
+      ],
+      "id": "8bb84c3a-79d5-41ff-80c2-40cbc2e9f316",
+      "name": "📅 Booking?"
+    },
+    {
+      "parameters": {
+        "resource": "event",
+        "fromAllCalendars": false,
+        "calendarId": {
+          "__rl": true,
+          "value": "={{ $('🧠 Context & Config').first().json.targetCalendarId }}",
+          "mode": "id"
+        },
+        "limit": 1,
+        "filters": {
+          "custom": "=start/dateTime eq '{{ $('🧹 Clean & Triage').first().json.bookingDetails }}'"
+        }
+      },
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        8336,
+        4992
+      ],
+      "id": "b30c8f80-9751-40a1-bcdb-eb18dc770aaa",
+      "name": "📅 Double Check Slot",
+      "webhookId": "18352d80-2323-4bc0-86c3-fe75a217df79",
+      "alwaysOutputData": true,
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "R4DP9ULTtcjsMOvu",
+          "name": "Microsoft Outlook account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "resource": "event",
+        "operation": "create",
+        "calendarId": {
+          "__rl": true,
+          "value": "={{ $('🧠 Context & Config').first().json.targetCalendarId }}",
+          "mode": "id"
+        },
+        "subject": "=Call Booking: {{ $('🧠 Context & Config').first().json.extractedName || 'Patient' }} ({{ $('🧠 Context & Config').first().json.appointmentType || 'gen' }}) - {{ $('🧠 Context & Config').first().json.callerPhone }}",
+        "startDateTime": "={{ $('🧹 Clean & Triage').first().json.bookingDetails }}",
+        "endDateTime": "={{ DateTime.fromISO($('🧹 Clean & Triage').first().json.bookingDetails).plus({ minutes: $('🧠 Context & Config').first().json.slotDuration }).toISO() }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        8768,
+        5072
+      ],
+      "id": "93343bd0-5f59-46c7-8b6f-9661adf941ad",
+      "name": "📝 Create Event",
+      "webhookId": "23e6ee9a-3622-4a9b-be00-b1083ade7081",
+      "alwaysOutputData": true,
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "R4DP9ULTtcjsMOvu",
+          "name": "Microsoft Outlook account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "check_cancel",
+              "leftValue": "={{ $json.cancelEventId }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        8992,
+        5184
+      ],
+      "id": "b086bb81-b306-4802-8002-37a992fdcdd3",
+      "name": "🗑️ Cancel?"
+    },
+    {
+      "parameters": {
+        "resource": "event",
+        "operation": "delete",
+        "calendarId": {
+          "__rl": true,
+          "value": "={{ $('🧠 Context & Config').first().json.targetCalendarId }}",
+          "mode": "id"
+        },
+        "eventId": {
+          "__rl": true,
+          "value": "{{ $('🧹 Clean & Triage').first().json.cancelEventId }}",
+          "mode": "id"
+        }
+      },
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        9232,
+        5312
+      ],
+      "id": "1e1a40f8-1461-453c-b6e4-f50cb6747b26",
+      "name": "❌ Delete Event",
+      "webhookId": "25785b08-c0b1-4b74-a4b3-f897a6139642",
+      "alwaysOutputData": true,
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "R4DP9ULTtcjsMOvu",
+          "name": "Microsoft Outlook account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "out_resp",
+              "name": "aiResponse",
+              "value": "={{ $json.aiResponse }}",
+              "type": "string"
+            },
+            {
+              "id": "out_metric",
+              "name": "latency_ms",
+              "value": "={{ $json.procTime }}",
+              "type": "number"
+            },
+            {
+              "id": "out_type",
+              "name": "outcome",
+              "value": "={{ $json.outcomeType }}",
+              "type": "string"
+            },
+            {
+              "id": "out_handled",
+              "name": "callHandledByAI",
+              "value": "={{ $json.callHandledByAI }}",
+              "type": "boolean"
+            },
+            {
+              "id": "out_time",
+              "name": "appointmentTime",
+              "value": "={{ $json.appointmentTimeISO }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        9456,
+        5184
+      ],
+      "id": "8778ded5-56c9-4ed0-96cf-ea8f654340eb",
+      "name": "✅ Return Result"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "slot_taken",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        8560,
+        4992
+      ],
+      "id": "11219fd0-707d-4362-aa10-1d187ccbb07b",
+      "name": "Is Slot Taken?1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nitem.aiResponse = \"I apologize, but that time was just booked a second ago. Would you like to try 1 hour later?\";\nitem.bookingDetails = null; // Cancel the booking action\nreturn [{ json: item }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        8768,
+        4912
+      ],
+      "id": "7d64422f-a1b5-4784-ae4a-f30b66fd4916",
+      "name": "Apology1"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $item(\"0\").$node[\"When Executed by Another Workflow\"].json[\"userMessage\"] }}\nRemember:\n- Use the calendar info and instructions in the systemPrompt.\n- If a booking time is confirmed, fill booking_confirmed_iso.\n- If rescheduling and an existing appointment was found, fill cancel_event_id with that event ID.\n- If you want to transfer to a human, set transfer_to_human to true.\n",
+        "hasOutputParser": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "={{ $json.systemPrompt }}\n\nYou MUST respond with a single JSON object and nothing else.\nDo not wrap it in ```json``` or any markdown.\n\nJSON SHAPE:\n{\n  \"reply\": string,\n  \"booking_confirmed_iso\": string,\n  \"cancel_event_id\": string,\n  \"transfer_to_human\": boolean\n}\n\nRULES:\n- Always include ALL 4 keys.\n- If there is NO booking, set \"booking_confirmed_iso\" to \"\" (empty string).\n- If there is NO cancellation, set \"cancel_event_id\" to \"\" (empty string).\n- \"transfer_to_human\" must be true or false (never a string).\n"
+            }
+          ]
+        },
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.7,
+      "position": [
+        7536,
+        5104
+      ],
+      "id": "b73f44d1-dd8b-4b88-bfdb-ed8b2569a5f5",
+      "name": "grok response1"
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"reply\": \"string: what you say to the caller\",\n  \"booking_confirmed_iso\": \"string: ISO datetime or empty string\",\n  \"cancel_event_id\": \"string: event id or empty string\",\n  \"transfer_to_human\": false\n}\n"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        7680,
+        5312
+      ],
+      "id": "32025d4b-4333-4ae2-9594-420c345e618c",
+      "name": "Structured Output Parser"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "18f51a44-f6b8-4d32-8e7c-86460677a28e",
+              "leftValue": "={{ $json.hasPhone }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        6320,
+        5184
+      ],
+      "id": "66b8cd53-51cd-42ee-aeaa-8f5ea31d8e5a",
+      "name": "📞 Has Phone Number?"
+    }
+  ],
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "🧠 Context & Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🧠 Context & Config": {
+      "main": [
+        [
+          {
+            "node": "📞 Has Phone Number?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🚦 Intent Router": {
+      "main": [
+        [
+          {
+            "node": "Known Name?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "🔍 Find Appt (Cancel)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "grok response1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Known Name?": {
+      "main": [
+        [
+          {
+            "node": "📅 Get Availability",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "📅 Get Availability",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📅 Get Availability": {
+      "main": [
+        [
+          {
+            "node": "🔍 Find Existing (Reschedule)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔍 Find Existing (Reschedule)": {
+      "main": [
+        [
+          {
+            "node": "🧠 Smart Scheduling Logic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🧠 Smart Scheduling Logic": {
+      "main": [
+        [
+          {
+            "node": "grok response1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔍 Find Appt (Cancel)": {
+      "main": [
+        [
+          {
+            "node": "🧠 Cancel Logic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🧠 Cancel Logic": {
+      "main": [
+        [
+          {
+            "node": "grok response1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🚀 Groq Brain": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "grok response1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🧹 Clean & Triage": {
+      "main": [
+        [
+          {
+            "node": "📅 Booking?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📅 Booking?": {
+      "main": [
+        [
+          {
+            "node": "📅 Double Check Slot",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "🗑️ Cancel?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📅 Double Check Slot": {
+      "main": [
+        [
+          {
+            "node": "Is Slot Taken?1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📝 Create Event": {
+      "main": [
+        [
+          {
+            "node": "🗑️ Cancel?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🗑️ Cancel?": {
+      "main": [
+        [
+          {
+            "node": "❌ Delete Event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "✅ Return Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "❌ Delete Event": {
+      "main": [
+        [
+          {
+            "node": "✅ Return Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Slot Taken?1": {
+      "main": [
+        [
+          {
+            "node": "Apology1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "📝 Create Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apology1": {
+      "main": [
+        [
+          {
+            "node": "✅ Return Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "grok response1": {
+      "main": [
+        [
+          {
+            "node": "🧹 Clean & Triage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "grok response1",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📞 Has Phone Number?": {
+      "main": [
+        [
+          {
+            "node": "🚦 Intent Router",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "grok response1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "c2fa6365600715b3688e78694ac7cd24363786f4c7c7e8694e71a91aa6e7addb"
+  }
+}
