@@ -57,7 +57,7 @@ Agency “Add Clinic” should call the `/api/provision/managed-clinic` endpoint
 
 1. Creates a Supabase auth user with a generated password.
 2. Inserts a `profiles` row with `role = managed_clinic` and the new `clinic_id`.
-3. Returns credentials once for the agency to share.
+3. Returns credentials once for the agency to share...
 
 The endpoint enforces that the caller is an `agency_admin` with a matching `agency_id`.
 
