@@ -1,21 +1,18 @@
-export { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
+export const APP_TITLE = import.meta.env.VITE_APP_TITLE || "Hybrid AI Receptionist";
+export const APP_LOGO =
+  import.meta.env.VITE_APP_LOGO || "https://placehold.co/128x128/0F172A/F8FAFC?text=AI";
 
-export const APP_TITLE = import.meta.env.VITE_APP_TITLE || "App";
+export const ROLES = {
+  agencyAdmin: "agency_admin",
+  managedClinic: "managed_clinic",
+  independentClinic: "independent_clinic",
+} as const;
 
-export const APP_LOGO = "https://placehold.co/128x128/E1E7EF/1F2937?text=App";
+export type UserRole = (typeof ROLES)[keyof typeof ROLES];
 
-// Generate login URL at runtime so redirect URI reflects the current origin.
-export const getLoginUrl = () => {
-  const oauthPortalUrl = import.meta.env.VITE_OAUTH_PORTAL_URL;
-  const appId = import.meta.env.VITE_APP_ID;
-  const redirectUri = `${window.location.origin}/api/oauth/callback`;
-  const state = btoa(redirectUri);
+export const PADDLE_BILLING_LINK =
+  import.meta.env.VITE_PADDLE_BILLING_LINK ||
+  "https://example.paddle.com/checkout/usage-only";
 
-  const url = new URL(`${oauthPortalUrl}/app-auth`);
-  url.searchParams.set("appId", appId);
-  url.searchParams.set("redirectUri", redirectUri);
-  url.searchParams.set("state", state);
-  url.searchParams.set("type", "signIn");
-
-  return url.toString();
-};
+export const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
+export const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
