@@ -1,48 +1,119 @@
-import { Toaster } from "@/components/ui/sonner";
-import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
-import { Route, Switch } from "wouter";
+import AgencyBilling from "@/pages/agency/AgencyBilling";
+import AgencyDashboard from "@/pages/agency/AgencyDashboard";
+import AgencySettings from "@/pages/agency/AgencySettings";
+import ClinicBilling from "@/pages/clinic/ClinicBilling";
+import ClinicDashboard from "@/pages/clinic/ClinicDashboard";
+import Landing from "@/pages/Landing";
+import AgencyLogin from "@/pages/auth/AgencyLogin";
+import ClinicLogin from "@/pages/auth/ClinicLogin";
+import ClinicSignup from "@/pages/auth/ClinicSignup";
+import { Route, Switch, useLocation } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
-import { AgencyProvider } from "./contexts/AgencyContext";
-import Home from "./pages/Home";
-import Login from "./pages/Login";
-import Dashboard from "./pages/Dashboard";
-import Settings from "./pages/Settings";
+import { Toaster } from "@/components/ui/sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { AuthProvider, useAuth } from "./contexts/AuthContext";
+import { ROLES, type UserRole } from "./const";
+import { Loader2 } from "lucide-react";
+import { useEffect } from "react";
+
+function RequireRole({
+  allowedRoles,
+  redirect,
+  children,
+}: {
+  allowedRoles: UserRole[];
+  redirect: string;
+  children: JSX.Element;
+}) {
+  const { profile, loading } = useAuth();
+  const [, setLocation] = useLocation();
+
+  useEffect(() => {
+    if (loading) return;
+    if (!profile || !allowedRoles.includes(profile.role)) {
+      setLocation(redirect);
+    }
+  }, [allowedRoles, loading, profile, redirect, setLocation]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-muted-foreground">
+        <Loader2 className="h-5 w-5 animate-spin mr-2" /> Checking access...
+      </div>
+    );
+  }
+
+  if (!profile || !allowedRoles.includes(profile.role)) return null;
+
+  return children;
+}
 
 function Router() {
-  // make sure to consider if you need authentication for certain routes
   return (
     <Switch>
-      <Route path={"/"} component={Home} />
-      <Route path={"/login"} component={Login} />
-      <Route path={"/dashboard"} component={Dashboard} />
-      <Route path={"/settings"} component={Settings} />
-      <Route path={"/404"} component={NotFound} />
-      {/* Final fallback route */}
+      <Route path="/" component={Landing} />
+      <Route path="/auth/agency-login" component={AgencyLogin} />
+      <Route path="/auth/clinic-login" component={ClinicLogin} />
+      <Route path="/auth/clinic-signup" component={ClinicSignup} />
+
+      <Route path="/agency">
+        {() => (
+          <RequireRole allowedRoles={[ROLES.agencyAdmin]} redirect="/auth/agency-login">
+            <AgencyDashboard />
+          </RequireRole>
+        )}
+      </Route>
+      <Route path="/agency/billing">
+        {() => (
+          <RequireRole allowedRoles={[ROLES.agencyAdmin]} redirect="/auth/agency-login">
+            <AgencyBilling />
+          </RequireRole>
+        )}
+      </Route>
+      <Route path="/agency/settings">
+        {() => (
+          <RequireRole allowedRoles={[ROLES.agencyAdmin]} redirect="/auth/agency-login">
+            <AgencySettings />
+          </RequireRole>
+        )}
+      </Route>
+
+      <Route path="/clinic/billing">
+        {() => (
+          <RequireRole
+            allowedRoles={[ROLES.independentClinic]}
+            redirect="/clinic"
+          >
+            <ClinicBilling />
+          </RequireRole>
+        )}
+      </Route>
+      <Route path="/clinic">
+        {() => (
+          <RequireRole allowedRoles={[ROLES.independentClinic, ROLES.managedClinic]} redirect="/auth/clinic-login">
+            <ClinicDashboard />
+          </RequireRole>
+        )}
+      </Route>
+
+      <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>
   );
 }
 
-// NOTE: About Theme
-// - First choose a default theme according to your design style (dark or light bg), than change color palette in index.css
-//   to keep consistent foreground/background color across components
-// - If you want to make theme switchable, pass `switchable` ThemeProvider and use `useTheme` hook
-
 function App() {
   return (
     <ErrorBoundary>
-      <ThemeProvider
-        defaultTheme="dark"
-        // switchable
-      >
-        <AgencyProvider>
+      <ThemeProvider defaultTheme="dark">
+        <AuthProvider>
           <TooltipProvider>
             <Toaster />
             <Router />
           </TooltipProvider>
-        </AgencyProvider>
+        </AuthProvider>
       </ThemeProvider>
     </ErrorBoundary>
   );
