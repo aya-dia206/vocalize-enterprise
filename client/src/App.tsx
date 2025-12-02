@@ -18,6 +18,7 @@ import { ROLES, type UserRole } from "./const";
 import { AgencyProvider } from "./contexts/AgencyContext";
 import { Loader2 } from "lucide-react";
 import { useEffect } from "react";
+import { isSupabaseConfigured } from "./lib/supabaseClient";
 
 function RequireRole({
   allowedRoles,
@@ -30,6 +31,17 @@ function RequireRole({
 }) {
   const { profile, loading } = useAuth();
   const [, setLocation] = useLocation();
+
+  if (!isSupabaseConfigured) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-muted-foreground text-center px-6">
+        <div className="space-y-2">
+          <Loader2 className="h-5 w-5 animate-spin mx-auto" />
+          <p className="text-sm">Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.</p>
+        </div>
+      </div>
+    );
+  }
 
   useEffect(() => {
     if (loading) return;
