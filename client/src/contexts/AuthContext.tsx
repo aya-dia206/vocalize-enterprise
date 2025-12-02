@@ -1,8 +1,8 @@
 import { APP_TITLE, ROLES, type UserRole } from "@/const";
 import { supabaseClient } from "@/lib/supabaseClient";
-import { loadProfile, provisionIndependentClinic } from "@/services/supabaseProfiles";
 import { AuthError, Session, User } from "@supabase/supabase-js";
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { nanoid } from "nanoid";
 
 export type Profile = {
   id: string;
@@ -34,9 +34,19 @@ const LOCAL_PROFILE_KEY = "vocalize_profile";
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<Profile | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(() => {
+    const stored = localStorage.getItem(LOCAL_PROFILE_KEY);
+    return stored ? (JSON.parse(stored) as Profile) : null;
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<AuthError | null>(null);
+
+  useEffect(() => {
+    const savedProfile = localStorage.getItem(LOCAL_PROFILE_KEY);
+    if (savedProfile && !profile) {
+      setProfile(JSON.parse(savedProfile) as Profile);
+    }
+  }, [profile]);
 
   useEffect(() => {
     if (!supabaseClient) return;
@@ -45,12 +55,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const { data } = await supabaseClient.auth.getSession();
       setSession(data.session ?? null);
       setUser(data.session?.user ?? null);
-      if (data.session?.user) {
-        const loaded = await loadProfile(data.session.user.id);
-        if (loaded) {
-          setProfile(loaded);
-          localStorage.setItem(LOCAL_PROFILE_KEY, JSON.stringify(loaded));
-        }
+      const derivedProfile = deriveProfileFromUser(data.session?.user ?? null);
+      if (derivedProfile) {
+        setProfile(derivedProfile);
+        localStorage.setItem(LOCAL_PROFILE_KEY, JSON.stringify(derivedProfile));
       }
     };
 
@@ -60,21 +68,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       (_event, newSession) => {
         setSession(newSession);
         setUser(newSession?.user ?? null);
-        if (newSession?.user) {
-          loadProfile(newSession.user.id)
-            .then(derivedProfile => {
-              setProfile(derivedProfile);
-              if (derivedProfile) {
-                localStorage.setItem(LOCAL_PROFILE_KEY, JSON.stringify(derivedProfile));
-              }
-            })
-            .catch(err => {
-              console.error("[Auth] Failed to load profile", err);
-              setError(err);
-              setProfile(null);
-            });
+        const derivedProfile = deriveProfileFromUser(newSession?.user ?? null);
+        setProfile(derivedProfile);
+        if (derivedProfile) {
+          localStorage.setItem(LOCAL_PROFILE_KEY, JSON.stringify(derivedProfile));
         } else {
-          setProfile(null);
           localStorage.removeItem(LOCAL_PROFILE_KEY);
         }
       }
@@ -101,46 +99,50 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   ) => {
     setLoading(true);
     setError(null);
-    if (!supabaseClient) {
+    if (supabaseClient) {
+      const { data, error: authError } = await supabaseClient.auth.signInWithPassword({
+        email,
+        password,
+      });
       setLoading(false);
-      throw new Error("Supabase is not configured; cannot sign in.");
-    }
-
-    const { data, error: authError } = await supabaseClient.auth.signInWithPassword({
-      email,
-      password,
-    });
-    setLoading(false);
-    if (authError) {
-      setError(authError);
+      if (authError) {
+        setError(authError);
+        return;
+      }
+      setSession(data.session ?? null);
+      setUser(data.user ?? null);
+      const derivedProfile = deriveProfileFromUser(data.user ?? null, roleHint);
+      saveProfile(derivedProfile);
       return;
     }
-    setSession(data.session ?? null);
-    setUser(data.user ?? null);
-    if (data.user) {
-      const derivedProfile = await loadProfile(data.user.id);
-      if (derivedProfile) {
-        saveProfile(derivedProfile);
-      }
-    }
+
+    const fallbackProfile: Profile = {
+      id: nanoid(),
+      email,
+      role: roleHint ?? ROLES.independentClinic,
+      clinicId: roleHint ? "" : nanoid(),
+    };
+    saveProfile(fallbackProfile);
+    setLoading(false);
   };
 
   const signInWithGoogle = async () => {
     setLoading(true);
     setError(null);
-    if (!supabaseClient) {
+    if (supabaseClient) {
+      const { error: authError } = await supabaseClient.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          queryParams: { prompt: "consent" },
+          redirectTo: window.location.origin,
+        },
+      });
       setLoading(false);
-      throw new Error("Supabase is not configured; cannot sign in.");
+      if (authError) setError(authError);
+      return;
     }
-    const { error: authError } = await supabaseClient.auth.signInWithOAuth({
-      provider: "google",
-      options: {
-        queryParams: { prompt: "consent" },
-        redirectTo: window.location.origin,
-      },
-    });
+    saveProfile({ id: nanoid(), role: ROLES.agencyAdmin, agencyId: nanoid() });
     setLoading(false);
-    if (authError) setError(authError);
   };
 
   const signInManagedClinic = async (username: string, password: string) => {
@@ -158,41 +160,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }) => {
     setLoading(true);
     setError(null);
-    if (!supabaseClient) {
-      setLoading(false);
-      throw new Error("Supabase is not configured; cannot sign up.");
-    }
-
-    const { data, error: authError } = await supabaseClient.auth.signUp({
-      email,
-      password,
-      options: {
-        data: {
-          role: ROLES.independentClinic,
-          clinic_name: name,
-          app: APP_TITLE,
+    if (supabaseClient) {
+      const { data, error: authError } = await supabaseClient.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            role: ROLES.independentClinic,
+            clinic_name: name,
+            app: APP_TITLE,
+          },
         },
-      },
-    });
-    if (authError) {
+      });
       setLoading(false);
-      setError(authError);
+      if (authError) {
+        setError(authError);
+        return;
+      }
+      const derivedProfile = deriveProfileFromUser(data.user ?? null, ROLES.independentClinic);
+      saveProfile(
+        derivedProfile ?? {
+          id: data.user?.id ?? nanoid(),
+          email,
+          role: ROLES.independentClinic,
+          clinicId: nanoid(),
+        }
+      );
       return;
     }
 
-    if (data.user) {
-      await provisionIndependentClinic({ user: data.user, clinicName: name });
-      const derivedProfile = await loadProfile(data.user.id);
-      saveProfile(
-        derivedProfile ?? {
-          id: data.user.id,
-          email,
-          role: ROLES.independentClinic,
-          clinicId: null,
-          agencyId: null,
-        }
-      );
-    }
+    const localProfile: Profile = {
+      id: nanoid(),
+      email,
+      role: ROLES.independentClinic,
+      clinicId: nanoid(),
+      metadata: { clinicName: name },
+    };
+    saveProfile(localProfile);
     setLoading(false);
   };
 
@@ -236,6 +240,23 @@ export const useAuth = () => {
   }
   return ctx;
 };
+
+function deriveProfileFromUser(user: User | null, roleHint?: UserRole): Profile | null {
+  if (!user) return null;
+  const role = (user.user_metadata?.role as UserRole | undefined) ?? roleHint;
+  const agencyId = user.user_metadata?.agency_id as string | null | undefined;
+  const clinicId = user.user_metadata?.clinic_id as string | null | undefined;
+  if (!role) return null;
+
+  return {
+    id: user.id,
+    email: user.email,
+    role,
+    agencyId: agencyId ?? null,
+    clinicId: clinicId ?? null,
+    metadata: user.user_metadata,
+  };
+}
 
 export function useRoleGuard() {
   const { profile } = useAuth();
