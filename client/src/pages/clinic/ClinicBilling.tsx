@@ -7,18 +7,59 @@ import { PADDLE_BILLING_LINK, ROLES } from "@/const";
 import { useAuth } from "@/contexts/AuthContext";
 import { CreditCard, PauseCircle } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { fetchSubscription } from "@/services/supabaseProfiles";
+import { toast } from "sonner";
 
 export default function ClinicBilling() {
-  const { profile } = useAuth();
+  const { profile, session } = useAuth();
   const [, setLocation] = useLocation();
-  const [status, setStatus] = useState<"active" | "canceled">("active");
+  const [status, setStatus] = useState<"active" | "canceled" | "trialing" | "past_due">("trialing");
   const [confirming, setConfirming] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (profile?.role === ROLES.managedClinic) {
       setLocation("/clinic");
     }
   }, [profile, setLocation]);
+
+  useEffect(() => {
+    if (!profile?.clinicId) return;
+    setLoading(true);
+    fetchSubscription("clinic", profile.clinicId)
+      .then(subscription => {
+        if (subscription?.status) setStatus(subscription.status);
+      })
+      .catch(err => {
+        console.error("[ClinicBilling] Failed to load subscription", err);
+        toast.error("Unable to load subscription status");
+      })
+      .finally(() => setLoading(false));
+  }, [profile?.clinicId]);
+
+  const cancel = async () => {
+    if (!profile?.clinicId) return;
+    setLoading(true);
+    try {
+      const res = await fetch("/api/subscriptions/cancel", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify({ ownerType: "clinic", ownerId: profile.clinicId }),
+      });
+      if (!res.ok) throw new Error("Failed to cancel");
+      setStatus("canceled");
+      toast.success("Plan marked canceled; Paddle will finalize");
+    } catch (err) {
+      console.error("[ClinicBilling] cancel error", err);
+      toast.error("Unable to cancel plan");
+    } finally {
+      setConfirming(false);
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-slate-950 text-white">
@@ -48,21 +89,21 @@ export default function ClinicBilling() {
             <CardTitle>Usage-only plan</CardTitle>
             <CardDescription>Pay only for minutes your AI receptionist handles.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-2 text-sm text-muted-foreground">
-            <p>No setup fee. Billing is handled via Paddle.</p>
-            <p>Managed clinics cannot access this page; agencies cover their license.</p>
-          </CardContent>
-          <CardFooter className="flex items-center justify-between">
-            <Button asChild>
-              <a href={PADDLE_BILLING_LINK} target="_blank" rel="noreferrer">
-                <CreditCard className="h-4 w-4 mr-2" /> Update payment method
-              </a>
-            </Button>
-            <Button variant="outline" onClick={() => setConfirming(true)}>
-              Stop subscription
-            </Button>
-          </CardFooter>
-        </Card>
+            <CardContent className="space-y-2 text-sm text-muted-foreground">
+              <p>No setup fee. Billing is handled via Paddle.</p>
+              <p>Managed clinics cannot access this page; agencies cover their license.</p>
+            </CardContent>
+            <CardFooter className="flex items-center justify-between">
+              <Button asChild>
+                <a href={PADDLE_BILLING_LINK} target="_blank" rel="noreferrer">
+                  <CreditCard className="h-4 w-4 mr-2" /> Update payment method
+                </a>
+              </Button>
+              <Button variant="outline" onClick={() => setConfirming(true)} disabled={loading}>
+                Stop subscription
+              </Button>
+            </CardFooter>
+          </Card>
       </main>
 
       <Dialog open={confirming} onOpenChange={setConfirming}>
@@ -77,13 +118,7 @@ export default function ClinicBilling() {
             <Button variant="outline" onClick={() => setConfirming(false)}>
               Keep plan
             </Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                setStatus("canceled");
-                setConfirming(false);
-              }}
-            >
+            <Button variant="destructive" onClick={cancel} disabled={loading}>
               Cancel plan
             </Button>
           </DialogFooter>

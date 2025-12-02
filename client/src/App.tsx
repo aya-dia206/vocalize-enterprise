@@ -15,6 +15,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { ROLES, type UserRole } from "./const";
+import { AgencyProvider } from "./contexts/AgencyContext";
 import { Loader2 } from "lucide-react";
 import { useEffect } from "react";
 
@@ -108,12 +109,14 @@ function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider defaultTheme="dark">
-        <AuthProvider>
-          <TooltipProvider>
-            <Toaster />
-            <Router />
-          </TooltipProvider>
-        </AuthProvider>
+        <AgencyProvider>
+          <AuthProvider>
+            <TooltipProvider>
+              <Toaster />
+              <Router />
+            </TooltipProvider>
+          </AuthProvider>
+        </AgencyProvider>
       </ThemeProvider>
     </ErrorBoundary>
   );

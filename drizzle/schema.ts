@@ -4,24 +4,10 @@ import { decimal, int, mysqlEnum, mysqlTable, text, timestamp, varchar } from "d
  * Supabase-aligned hybrid receptionist schema.
  * These tables mirror the expected Supabase Postgres models so local MySQL
  * and generated types stay in sync with production.
+ *
+ * The legacy `users` table from the starter template is intentionally removed
+ * from active usage; Supabase auth + profiles is the single source of truth.
  */
-export const users = mysqlTable("users", {
-  id: int("id").autoincrement().primaryKey(),
-  /**
-   * Legacy openId support for existing auth flows. Retained for backward compatibility.
-   */
-  openId: varchar("openId", { length: 64 }).notNull().unique(),
-  name: text("name"),
-  email: varchar("email", { length: 320 }),
-  loginMethod: varchar("loginMethod", { length: 64 }),
-  role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-  lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
-});
-
-export type User = typeof users.$inferSelect;
-export type InsertUser = typeof users.$inferInsert;
 
 export const agencies = mysqlTable("agencies", {
   id: varchar("id", { length: 36 }).primaryKey(),

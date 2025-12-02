@@ -1,7 +1,12 @@
 import { ROLES } from "@/const";
 import { supabaseClient } from "@/lib/supabaseClient";
 import type { Profile } from "@/contexts/AuthContext";
-import type { CallRow, ClinicRow, Profile as SupabaseProfile, SubscriptionRow } from "@shared/supabase.types";
+import type {
+  CallRow,
+  ClinicRow,
+  Profile as SupabaseProfile,
+  SubscriptionRow,
+} from "@shared/supabase.types";
 import { User } from "@supabase/supabase-js";
 
 export async function loadProfile(userId: string): Promise<Profile | null> {
@@ -66,6 +71,7 @@ export async function provisionManagedClinicUser(params: {
   phoneNumber?: string;
   username: string;
   password: string;
+  accessToken?: string | null;
 }): Promise<{ clinic: ClinicRow | null; profile: SupabaseProfile | null }> {
   if (!supabaseClient) throw new Error("Supabase not configured");
 
@@ -85,10 +91,13 @@ export async function provisionManagedClinicUser(params: {
 
   if (clinicError) throw clinicError;
 
-  // This endpoint expects a backend function that uses the service role to create a user.
+  // This endpoint uses the service role to create a Supabase auth user + profile.
   const response = await fetch("/api/provision/managed-clinic", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(params.accessToken ? { Authorization: `Bearer ${params.accessToken}` } : {}),
+    },
     body: JSON.stringify({
       clinicId,
       username: params.username,
@@ -103,6 +112,17 @@ export async function provisionManagedClinicUser(params: {
 
   const { profile } = (await response.json()) as { profile: SupabaseProfile | null };
   return { clinic, profile };
+}
+
+export async function fetchAgencyClinics(agencyId: string): Promise<ClinicRow[]> {
+  if (!supabaseClient) return [];
+  const { data, error } = await supabaseClient
+    .from("clinics")
+    .select("*")
+    .eq("agency_id", agencyId)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data ?? [];
 }
 
 export async function fetchClinicCalls(clinicId: string): Promise<CallRow[]> {

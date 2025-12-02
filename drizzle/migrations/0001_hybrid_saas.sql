@@ -61,7 +61,8 @@ create table if not exists subscriptions (
 );
 
 -- RLS policy stubs (to be applied in Supabase)
--- agencies: allow update/select where id = profile.agency_id for agency_admin
--- clinics: agency_admin can access clinics.agency_id = profile.agency_id; clinic roles limited to their clinic_id
--- calls: restricted by clinic ownership; join through clinics for agencies
--- subscriptions: owner scoping based on owner_type/owner_id, managed clinics denied
+-- agencies: enable row level security; allow update/select where id = auth.uid()->profiles.agency_id for role agency_admin
+-- clinics: enable RLS; agency_admin can access clinics.agency_id = profile.agency_id;
+--          managed/independent clinic can access only clinic_id = profile.clinic_id
+-- calls: enable RLS; clinics match profile.clinic_id, agencies join clinics on agency_id
+-- subscriptions: enable RLS; owner_type/owner_id must match profile agency/clinic, deny managed clinics

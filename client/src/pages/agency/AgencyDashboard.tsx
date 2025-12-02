@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,37 +19,12 @@ import { Separator } from "@/components/ui/separator";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Bar, BarChart, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis } from "recharts";
-import { ArrowLeftRight, BarChart3, Clipboard, Plus, Shield, Trash2 } from "lucide-react";
+import { ArrowLeftRight, BarChart3, Clipboard, Loader2, Plus, Shield, Trash2 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
-import { nanoid } from "nanoid";
-
-interface AgencyClinic {
-  id: string;
-  name: string;
-  ghlLocationId: string;
-  phoneNumber: string;
-  status: "Active" | "Paused";
-  username: string;
-}
-
-const defaultClinics: AgencyClinic[] = [
-  {
-    id: "clinic-1",
-    name: "Northside Dental",
-    ghlLocationId: "ghl_12345",
-    phoneNumber: "(555) 201-1200",
-    status: "Active",
-    username: "northside-admin",
-  },
-  {
-    id: "clinic-2",
-    name: "Bright Vision Eye Care",
-    ghlLocationId: "ghl_55678",
-    phoneNumber: "(555) 882-4411",
-    status: "Paused",
-    username: "bright-vision",
-  },
-];
+import { fetchAgencyClinics, provisionManagedClinicUser } from "@/services/supabaseProfiles";
+import { toast } from "sonner";
+import { isSupabaseConfigured, supabaseClient } from "@/lib/supabaseClient";
+import type { ClinicRow } from "@shared/supabase.types";
 
 const chartData = [
   { month: "Jan", calls: 320 },
@@ -61,44 +36,90 @@ const chartData = [
 ];
 
 export default function AgencyDashboard() {
-  const { profile, signOut } = useAuth();
+  const { profile, signOut, user, session } = useAuth();
   const [, setLocation] = useLocation();
-  const [clinics, setClinics] = useState<AgencyClinic[]>(defaultClinics);
+  const [clinics, setClinics] = useState<ClinicRow[]>([]);
   const [newClinic, setNewClinic] = useState({
     name: "",
     ghlLocationId: "",
     phoneNumber: "",
     username: "",
-    password: nanoid(10),
+    password: crypto.randomUUID().slice(0, 10),
   });
-  const [selectedClinic, setSelectedClinic] = useState<AgencyClinic | null>(null);
+  const [selectedClinic, setSelectedClinic] = useState<ClinicRow | null>(null);
   const [showDelete, setShowDelete] = useState(false);
   const [openAddModal, setOpenAddModal] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const addClinic = () => {
-    if (!newClinic.name || !newClinic.username) return;
-    const clinic: AgencyClinic = {
-      id: nanoid(),
-      name: newClinic.name,
-      ghlLocationId: newClinic.ghlLocationId,
-      phoneNumber: newClinic.phoneNumber,
-      status: "Active",
-      username: newClinic.username,
-    };
-    setClinics(prev => [...prev, clinic]);
-    setOpenAddModal(false);
+  useEffect(() => {
+    if (!profile?.agencyId || !isSupabaseConfigured) return;
+    setLoading(true);
+    fetchAgencyClinics(profile.agencyId)
+      .then(setClinics)
+      .catch(err => {
+        console.error("[AgencyDashboard] Failed to load clinics", err);
+        setError("Unable to load clinics right now");
+      })
+      .finally(() => setLoading(false));
+  }, [profile?.agencyId]);
+
+  const addClinic = async () => {
+    if (!profile?.agencyId) {
+      toast.error("Missing agency context");
+      return;
+    }
+    try {
+      setLoading(true);
+      const result = await provisionManagedClinicUser({
+        agencyId: profile.agencyId,
+        clinicName: newClinic.name,
+        ghlLocationId: newClinic.ghlLocationId,
+        phoneNumber: newClinic.phoneNumber,
+        username: newClinic.username,
+        password: newClinic.password,
+        accessToken: session?.access_token,
+      });
+
+      if (result.clinic) {
+        setClinics(prev => [result.clinic!, ...prev]);
+      }
+      toast.success("Clinic provisioned. Share credentials with the client.");
+      setOpenAddModal(false);
+      setNewClinic({ name: "", ghlLocationId: "", phoneNumber: "", username: "", password: crypto.randomUUID().slice(0, 10) });
+    } catch (err) {
+      console.error("[AgencyDashboard] Failed to add clinic", err);
+      toast.error("Unable to provision clinic. Check Supabase + service role API.");
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const deleteClinic = () => {
-    if (!selectedClinic) return;
-    setClinics(prev => prev.filter(c => c.id !== selectedClinic.id));
-    setSelectedClinic(null);
-    setShowDelete(false);
+  const deleteClinic = async () => {
+    if (!selectedClinic || !supabaseClient) return;
+    try {
+      setLoading(true);
+      await supabaseClient
+        .from("clinics")
+        .update({ system_status: "paused" })
+        .eq("id", selectedClinic.id);
+      toast.success("Clinic paused and access revoked. TODO: disable managed user auth.");
+      setClinics(prev => prev.filter(c => c.id !== selectedClinic.id));
+    } catch (err) {
+      console.error("[AgencyDashboard] Failed to remove clinic", err);
+      toast.error("Unable to remove clinic. Try again.");
+    } finally {
+      setSelectedClinic(null);
+      setShowDelete(false);
+      setLoading(false);
+    }
   };
 
-  const handleImpersonate = (clinic: AgencyClinic) => {
+  const handleImpersonate = (clinic: ClinicRow) => {
     setLocation(`/clinic?impersonated=${clinic.id}`);
   };
+
+  const totalClinics = useMemo(() => clinics.length, [clinics]);
 
   return (
     <div className="min-h-screen bg-slate-950 text-white">
@@ -106,7 +127,7 @@ export default function AgencyDashboard() {
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
           <div>
             <p className="text-xs uppercase tracking-[0.2em] text-emerald-300">Agency Dashboard</p>
-            <h1 className="text-2xl font-semibold">Welcome back{profile?.email ? `, ${profile.email}` : ""}</h1>
+            <h1 className="text-2xl font-semibold">Welcome back{user?.email ? `, ${user.email}` : ""}</h1>
           </div>
           <div className="flex items-center gap-2">
             <Button variant="ghost" onClick={() => setLocation("/agency")}>Overview</Button>
@@ -122,7 +143,7 @@ export default function AgencyDashboard() {
 
       <main className="max-w-6xl mx-auto px-6 py-8 space-y-8">
         <section className="grid md:grid-cols-3 gap-4">
-          <MetricCard title="Total Clinics" value={clinics.length.toString()} description="Managed across your agency" />
+          <MetricCard title="Total Clinics" value={totalClinics.toString()} description="Managed across your agency" />
           <MetricCard title="Monthly Call Volume" value="3,200" description="Aggregated across clinics" />
           <MetricCard title="Revenue" value="$24,480" description="Placeholder until Paddle webhooks" />
         </section>
@@ -168,10 +189,14 @@ export default function AgencyDashboard() {
             <div>
               <h2 className="text-xl font-semibold">Clinics</h2>
               <p className="text-sm text-muted-foreground">Manage managed and independent clinics.</p>
+              {!isSupabaseConfigured && (
+                <p className="text-xs text-amber-400 mt-2">Supabase is not configured. Set VITE_SUPABASE_URL and keys.</p>
+              )}
+              {error && <p className="text-xs text-red-400 mt-2">{error}</p>}
             </div>
             <Dialog open={openAddModal} onOpenChange={setOpenAddModal}>
               <DialogTrigger asChild>
-                <Button>
+                <Button disabled={loading || !isSupabaseConfigured}>
                   <Plus className="h-4 w-4 mr-2" /> Add Clinic
                 </Button>
               </DialogTrigger>
@@ -244,8 +269,14 @@ export default function AgencyDashboard() {
                   </TabsContent>
                 </Tabs>
                 <DialogFooter>
-                  <Button onClick={addClinic} disabled={!newClinic.name || !newClinic.username}>
-                    Save clinic & credentials
+                  <Button onClick={addClinic} disabled={!newClinic.name || !newClinic.username || loading}>
+                    {loading ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Saving...
+                      </>
+                    ) : (
+                      "Save clinic & credentials"
+                    )}
                   </Button>
                 </DialogFooter>
               </DialogContent>
@@ -264,35 +295,52 @@ export default function AgencyDashboard() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {clinics.map(clinic => (
-                  <TableRow key={clinic.id} className="hover:bg-white/5">
-                    <TableCell>
-                      <button className="text-left text-emerald-200 hover:underline" onClick={() => handleImpersonate(clinic)}>
-                        {clinic.name}
-                      </button>
-                    </TableCell>
-                    <TableCell>{clinic.ghlLocationId}</TableCell>
-                    <TableCell>{clinic.phoneNumber}</TableCell>
-                    <TableCell>
-                      <Badge variant={clinic.status === "Active" ? "default" : "secondary"}>{clinic.status}</Badge>
-                    </TableCell>
-                    <TableCell className="text-right space-x-2">
-                      <Button variant="outline" size="sm" onClick={() => handleImpersonate(clinic)}>
-                        <ArrowLeftRight className="h-4 w-4 mr-1" /> View Dashboard
-                      </Button>
-                      <Button
-                        variant="destructive"
-                        size="icon"
-                        onClick={() => {
-                          setSelectedClinic(clinic);
-                          setShowDelete(true);
-                        }}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                {loading && (
+                  <TableRow>
+                    <TableCell colSpan={5} className="text-center text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin inline mr-2" /> Loading clinics...
                     </TableCell>
                   </TableRow>
-                ))}
+                )}
+                {!loading && clinics.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={5} className="text-center text-muted-foreground">
+                      No clinics yet. Use "Add Clinic" to provision managed access.
+                    </TableCell>
+                  </TableRow>
+                )}
+                {!loading &&
+                  clinics.map(clinic => (
+                    <TableRow key={clinic.id} className="hover:bg-white/5">
+                      <TableCell>
+                        <button className="text-left text-emerald-200 hover:underline" onClick={() => handleImpersonate(clinic)}>
+                          {clinic.name}
+                        </button>
+                      </TableCell>
+                      <TableCell>{clinic.ghl_location_id ?? "-"}</TableCell>
+                      <TableCell>{clinic.phone_number ?? "-"}</TableCell>
+                      <TableCell>
+                        <Badge variant={clinic.system_status === "active" ? "default" : "secondary"}>
+                          {clinic.system_status === "active" ? "Active" : "Paused"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right space-x-2">
+                        <Button variant="outline" size="sm" onClick={() => handleImpersonate(clinic)}>
+                          <ArrowLeftRight className="h-4 w-4 mr-1" /> View Dashboard
+                        </Button>
+                        <Button
+                          variant="destructive"
+                          size="icon"
+                          onClick={() => {
+                            setSelectedClinic(clinic);
+                            setShowDelete(true);
+                          }}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
               </TableBody>
             </Table>
           </Card>

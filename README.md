@@ -14,15 +14,19 @@ pnpm dev # runs the API/dev server
 pnpm test # vitest suite
 ```
 
-The front-end lives in `client/` and consumes Supabase directly via `supabaseClient`. The server folder contains API stubs and webhook entry points.
+The dev server runs the Express API (webhooks + provisioning) and proxies Vite for the client. The client mounts in `client/src`
+and consumes Supabase directly via `supabaseClient`.
+
+If you want to run only the client, use `pnpm --filter client dev`, but the default `pnpm dev` is the recommended full-stack flow.
 
 ## Environment variables
 
 Create a `.env` file (or use Vite env for the client) with:
 
-- `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` – Supabase project keys
-- `SUPABASE_SERVICE_ROLE` – used by the backend to provision managed clinic users
+- `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` – Supabase project keys for the client
+- `SUPABASE_URL` / `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE` – backend provisioning + webhook access
 - `PADDLE_API_KEY`, `PADDLE_CHECKOUT_LINK`, `PADDLE_PORTAL_LINK` – hosted Paddle endpoints
+- `VITE_PADDLE_BILLING_LINK` – client-visible hosted checkout/portal link
 
 ## Database schema (Supabase)
 
@@ -33,9 +37,19 @@ Create a `.env` file (or use Vite env for the client) with:
 - calls: filter through clinic ownership
 - subscriptions: scoped by `owner_type`/`owner_id`, managed clinics denied
 
+RLS policies (copy/paste into the Supabase SQL editor and adapt):
+
+- agencies: enable RLS; allow select/update where `id = (select agency_id from profiles where id = auth.uid())` and `role = 'agency_admin'`.
+- clinics: enable RLS; allow agencies when `clinics.agency_id = profiles.agency_id`; allow clinics when `clinics.id = profiles.clinic_id`.
+- calls: enable RLS; clinics limited to their `clinic_id`; agencies join clinics on `agency_id`.
+- subscriptions: enable RLS; require `owner_type/owner_id` match the caller's agency/clinic; block managed clinics entirely.
+
 ## Billing & webhooks
 
 Paddle actions are hosted-link driven. Implement webhook handlers to update the `subscriptions` table on create/update/cancel events and gate UI buttons based on subscription status.
+
+- Webhook endpoint: `POST /api/webhooks/paddle` (signature validation TODO in code)
+- Cancel endpoint: `POST /api/subscriptions/cancel` (requires Supabase bearer token; respects role scoping)
 
 ## Managed clinic provisioning
 
@@ -44,6 +58,8 @@ Agency “Add Clinic” should call the `/api/provision/managed-clinic` endpoint
 1. Creates a Supabase auth user with a generated password.
 2. Inserts a `profiles` row with `role = managed_clinic` and the new `clinic_id`.
 3. Returns credentials once for the agency to share.
+
+The endpoint enforces that the caller is an `agency_admin` with a matching `agency_id`.
 
 ## Role-based routing
 
